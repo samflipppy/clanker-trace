@@ -13,7 +13,8 @@
     "test": "npm run test --workspaces --if-present",
     "dev:server": "npm run dev --workspace=server",
     "dev:web": "npm run dev --workspace=web",
-    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\""
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
+    "serve": "node server/dist/selfhost.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.0"
