@@ -5,8 +5,10 @@ import type Database from 'better-sqlite3';
 import { createDatabase } from './db/schema';
 import { EventStore } from './db/store';
 import { authMiddleware, generateApiKey, hashApiKey } from './middleware/auth';
+import { creditGateMiddleware } from './middleware/credits';
 import { createIngestRouter } from './routes/ingest';
 import { createQueryRouter } from './routes/query';
+import { createBillingRouter } from './routes/billing';
 
 export function createApp(dbPath?: string): { app: Express; db: Database.Database; store: EventStore } {
   const db = createDatabase(dbPath);
@@ -37,12 +39,16 @@ export function createApp(dbPath?: string): { app: Express; db: Database.Databas
 
   // Authenticated routes
   const auth = authMiddleware(store);
+  const creditGate = creditGateMiddleware(store);
 
-  // Ingestion API
-  app.use('/v1/ingest', auth, createIngestRouter(store));
+  // Ingestion API (auth + credit-gated)
+  app.use('/v1/ingest', auth, creditGate, createIngestRouter(store));
 
-  // Query API
+  // Query API (auth only — reading is free)
   app.use('/v1/query', auth, createQueryRouter(store));
+
+  // Billing API (auth only)
+  app.use('/v1/billing', auth, createBillingRouter(store));
 
   return { app, db, store };
 }

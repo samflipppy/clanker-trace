@@ -66,5 +66,30 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_events_error ON events(tenant_id, error_flag) WHERE error_flag = 1;
     CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(tenant_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_events_agent ON events(tenant_id, agent_id);
+
+    CREATE TABLE IF NOT EXISTS credits (
+      tenant_id TEXT PRIMARY KEY,
+      balance INTEGER NOT NULL DEFAULT 0,
+      total_deposited INTEGER NOT NULL DEFAULT 0,
+      total_consumed INTEGER NOT NULL DEFAULT 0,
+      free_tier_remaining INTEGER NOT NULL DEFAULT 10000,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS credit_transactions (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      stripe_payment_intent_id TEXT,
+      deposit_address TEXT,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_credit_tx_tenant ON credit_transactions(tenant_id, created_at);
   `);
 }

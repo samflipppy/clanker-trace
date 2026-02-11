@@ -386,11 +386,161 @@ export class EventStore {
       INSERT OR IGNORE INTO tenants (id, name, api_key_hash) VALUES (?, ?, ?)
     `);
     stmt.run(id, name, apiKeyHash);
+
+    // Initialize credit balance with free tier
+    const creditStmt = this.db.prepare(`
+      INSERT OR IGNORE INTO credits (tenant_id, balance, free_tier_remaining) VALUES (?, 0, 10000)
+    `);
+    creditStmt.run(id);
   }
 
   getTenantByApiKeyHash(apiKeyHash: string): { id: string; name: string } | null {
     const stmt = this.db.prepare(`SELECT id, name FROM tenants WHERE api_key_hash = ?`);
     return (stmt.get(apiKeyHash) as any) || null;
+  }
+
+  // --- Credit operations ---
+
+  getCredits(tenantId: string): { balance: number; free_tier_remaining: number; total_deposited: number; total_consumed: number } {
+    const stmt = this.db.prepare(`SELECT * FROM credits WHERE tenant_id = ?`);
+    const row = stmt.get(tenantId) as any;
+    if (!row) {
+      return { balance: 0, free_tier_remaining: 10000, total_deposited: 0, total_consumed: 0 };
+    }
+    return {
+      balance: row.balance,
+      free_tier_remaining: row.free_tier_remaining,
+      total_deposited: row.total_deposited,
+      total_consumed: row.total_consumed,
+    };
+  }
+
+  getEffectiveBalance(tenantId: string): number {
+    const credits = this.getCredits(tenantId);
+    return credits.balance + credits.free_tier_remaining;
+  }
+
+  consumeCredits(tenantId: string, amount: number): boolean {
+    const transaction = this.db.transaction(() => {
+      const credits = this.getCredits(tenantId);
+      const effective = credits.balance + credits.free_tier_remaining;
+      if (effective < amount) return false;
+
+      // Consume from free tier first, then paid balance
+      let fromFree = Math.min(credits.free_tier_remaining, amount);
+      let fromPaid = amount - fromFree;
+
+      this.db.prepare(`
+        UPDATE credits
+        SET free_tier_remaining = free_tier_remaining - ?,
+            balance = balance - ?,
+            total_consumed = total_consumed + ?,
+            updated_at = datetime('now')
+        WHERE tenant_id = ?
+      `).run(fromFree, fromPaid, amount, tenantId);
+
+      return true;
+    });
+    return transaction();
+  }
+
+  addCredits(tenantId: string, amount: number, stripePaymentIntentId?: string, depositAddress?: string): { balance: number; transaction_id: string } {
+    const txId = uuidv4();
+    const transaction = this.db.transaction(() => {
+      // Ensure credits row exists
+      this.db.prepare(`
+        INSERT OR IGNORE INTO credits (tenant_id) VALUES (?)
+      `).run(tenantId);
+
+      this.db.prepare(`
+        UPDATE credits
+        SET balance = balance + ?,
+            total_deposited = total_deposited + ?,
+            updated_at = datetime('now')
+        WHERE tenant_id = ?
+      `).run(amount, amount, tenantId);
+
+      const credits = this.getCredits(tenantId);
+
+      this.db.prepare(`
+        INSERT INTO credit_transactions (id, tenant_id, type, amount, balance_after, stripe_payment_intent_id, deposit_address, description)
+        VALUES (?, ?, 'deposit', ?, ?, ?, ?, 'Credit deposit')
+      `).run(txId, tenantId, amount, credits.balance, stripePaymentIntentId || null, depositAddress || null);
+
+      return credits.balance;
+    });
+
+    const balance = transaction();
+    return { balance, transaction_id: txId };
+  }
+
+  getCreditTransactions(tenantId: string, limit: number = 50): Array<{
+    id: string;
+    type: string;
+    amount: number;
+    balance_after: number;
+    stripe_payment_intent_id?: string;
+    description?: string;
+    created_at: string;
+  }> {
+    const stmt = this.db.prepare(`
+      SELECT * FROM credit_transactions
+      WHERE tenant_id = ?
+      ORDER BY created_at DESC LIMIT ?
+    `);
+    return (stmt.all(tenantId, limit) as any[]).map(r => ({
+      id: r.id,
+      type: r.type,
+      amount: r.amount,
+      balance_after: r.balance_after,
+      stripe_payment_intent_id: r.stripe_payment_intent_id || undefined,
+      description: r.description || undefined,
+      created_at: r.created_at,
+    }));
+  }
+
+  // --- Agent-facing convenience queries ---
+
+  getLatestRun(tenantId: string, agentId?: string): RunRecord | null {
+    const conditions = ['tenant_id = ?'];
+    const params: any[] = [tenantId];
+    if (agentId) {
+      conditions.push('agent_id = ?');
+      params.push(agentId);
+    }
+    const stmt = this.db.prepare(`
+      SELECT * FROM runs WHERE ${conditions.join(' AND ')}
+      ORDER BY started_at DESC LIMIT 1
+    `);
+    const row = stmt.get(...params) as any;
+    return row ? this.mapRun(row) : null;
+  }
+
+  getAgentStatus(tenantId: string, agentId: string): {
+    last_run: RunRecord | null;
+    recent_failure_count: number;
+    total_runs_24h: number;
+    avg_latency_24h: number;
+  } {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const lastRun = this.getLatestRun(tenantId, agentId);
+
+    const statsStmt = this.db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failures,
+        AVG(duration_ms) as avg_latency
+      FROM runs
+      WHERE tenant_id = ? AND agent_id = ? AND started_at >= ?
+    `);
+    const stats = statsStmt.get(tenantId, agentId, cutoff) as any;
+
+    return {
+      last_run: lastRun,
+      recent_failure_count: stats.failures || 0,
+      total_runs_24h: stats.total || 0,
+      avg_latency_24h: Math.round(stats.avg_latency || 0),
+    };
   }
 
   // --- Helpers ---

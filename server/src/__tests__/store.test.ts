@@ -51,6 +51,27 @@ function createTestDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_events_run ON events(tenant_id, run_id, sequence_number);
     CREATE INDEX IF NOT EXISTS idx_events_type ON events(tenant_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_events_error ON events(tenant_id, error_flag) WHERE error_flag = 1;
+    CREATE TABLE IF NOT EXISTS credits (
+      tenant_id TEXT PRIMARY KEY,
+      balance INTEGER NOT NULL DEFAULT 0,
+      total_deposited INTEGER NOT NULL DEFAULT 0,
+      total_consumed INTEGER NOT NULL DEFAULT 0,
+      free_tier_remaining INTEGER NOT NULL DEFAULT 10000,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+    CREATE TABLE IF NOT EXISTS credit_transactions (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      stripe_payment_intent_id TEXT,
+      deposit_address TEXT,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
   `);
   return db;
 }

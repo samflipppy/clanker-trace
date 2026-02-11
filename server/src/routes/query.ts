@@ -157,5 +157,32 @@ export function createQueryRouter(store: EventStore): Router {
     res.json(metrics);
   });
 
+  // --- Agent-facing convenience endpoints ---
+  // These are designed for agents to self-query their own execution history.
+
+  // Get the most recent run (agent asks: "did my last run fail?")
+  router.get('/runs/latest', (req: Request, res: Response): void => {
+    const tenantId = req.tenantId!;
+    const agentId = req.query.agent_id as string | undefined;
+    const run = store.getLatestRun(tenantId, agentId);
+    if (!run) {
+      res.status(404).json({ error: 'No runs found' });
+      return;
+    }
+    res.json(run);
+  });
+
+  // Get agent health status (agent asks: "how am I doing?")
+  router.get('/agent/:agentId/status', (req: Request, res: Response): void => {
+    const tenantId = req.tenantId!;
+    const { agentId } = req.params;
+    const status = store.getAgentStatus(tenantId, agentId);
+    res.json({
+      agent_id: agentId,
+      healthy: status.recent_failure_count === 0,
+      ...status,
+    });
+  });
+
   return router;
 }

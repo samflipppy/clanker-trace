@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -14,24 +15,45 @@ from urllib.error import URLError, HTTPError
 
 T = TypeVar("T")
 
+DEFAULT_ENDPOINT = "https://api.clankertrace.com"
+
 
 @dataclass
 class ClankerTraceConfig:
-    endpoint: str
-    api_key: str
-    agent_id: str
+    endpoint: str = ""
+    api_key: str = ""
+    agent_id: str = ""
     batch_size: int = 50
     flush_interval_s: float = 1.0
     max_retries: int = 3
 
 
+def init(**overrides: Any) -> ClankerTrace:
+    """Zero-config initializer. Reads from environment variables:
+    CLANKER_API_KEY, CLANKER_ENDPOINT, CLANKER_AGENT_ID
+
+    Usage:
+        ct = init()
+        run = ct.start_run(goal="my task")
+    """
+    return ClankerTrace(ClankerTraceConfig(
+        endpoint=overrides.get("endpoint", ""),
+        api_key=overrides.get("api_key", ""),
+        agent_id=overrides.get("agent_id", ""),
+        batch_size=overrides.get("batch_size", 50),
+        flush_interval_s=overrides.get("flush_interval_s", 1.0),
+        max_retries=overrides.get("max_retries", 3),
+    ))
+
+
 class ClankerTrace:
     """Main client for Clanker Trace instrumentation."""
 
-    def __init__(self, config: ClankerTraceConfig) -> None:
-        self._endpoint = config.endpoint.rstrip("/")
-        self._api_key = config.api_key
-        self._agent_id = config.agent_id
+    def __init__(self, config: Optional[ClankerTraceConfig] = None) -> None:
+        config = config or ClankerTraceConfig()
+        self._endpoint = (config.endpoint or os.environ.get("CLANKER_ENDPOINT", DEFAULT_ENDPOINT)).rstrip("/")
+        self._api_key = config.api_key or os.environ.get("CLANKER_API_KEY", "")
+        self._agent_id = config.agent_id or os.environ.get("CLANKER_AGENT_ID", "default")
         self._batch_size = config.batch_size
         self._flush_interval = config.flush_interval_s
         self._max_retries = config.max_retries

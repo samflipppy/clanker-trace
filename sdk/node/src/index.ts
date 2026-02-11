@@ -1,12 +1,33 @@
 import { v4 as uuidv4 } from 'uuid';
 
+const DEFAULT_ENDPOINT = 'https://api.clankertrace.com';
+
 export interface ClankerTraceConfig {
-  endpoint: string;
-  apiKey: string;
-  agentId: string;
+  endpoint?: string;
+  apiKey?: string;
+  agentId?: string;
   batchSize?: number;
   flushIntervalMs?: number;
   maxRetries?: number;
+}
+
+/**
+ * Zero-config initializer. Reads from environment variables:
+ *   CLANKER_API_KEY, CLANKER_ENDPOINT, CLANKER_AGENT_ID
+ *
+ * Usage:
+ *   const ct = init();
+ *   const run = await ct.startRun({ goal: 'my task' });
+ */
+export function init(overrides?: Partial<ClankerTraceConfig>): ClankerTrace {
+  return new ClankerTrace({
+    endpoint: overrides?.endpoint,
+    apiKey: overrides?.apiKey,
+    agentId: overrides?.agentId,
+    batchSize: overrides?.batchSize,
+    flushIntervalMs: overrides?.flushIntervalMs,
+    maxRetries: overrides?.maxRetries,
+  });
 }
 
 export interface RunOptions {
@@ -65,10 +86,10 @@ export class ClankerTrace {
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private flushing = false;
 
-  constructor(config: ClankerTraceConfig) {
-    this.endpoint = config.endpoint.replace(/\/$/, '');
-    this.apiKey = config.apiKey;
-    this.agentId = config.agentId;
+  constructor(config: ClankerTraceConfig = {}) {
+    this.endpoint = (config.endpoint || process.env.CLANKER_ENDPOINT || DEFAULT_ENDPOINT).replace(/\/$/, '');
+    this.apiKey = config.apiKey || process.env.CLANKER_API_KEY || '';
+    this.agentId = config.agentId || process.env.CLANKER_AGENT_ID || 'default';
     this.batchSize = config.batchSize ?? 50;
     this.flushIntervalMs = config.flushIntervalMs ?? 1000;
     this.maxRetries = config.maxRetries ?? 3;
