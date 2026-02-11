@@ -80,8 +80,25 @@ export async function fetchRun(runId: string): Promise<Run> {
   return request(`/runs/${runId}`);
 }
 
-export async function fetchTimeline(runId: string): Promise<{ run: Run; events: TraceEvent[] }> {
-  return request(`/runs/${runId}/timeline`);
+export interface TimelineGroup {
+  group_id: string;
+  name: string;
+  kind: string;
+  latency_ms?: number;
+  error: boolean;
+  event_count: number;
+  events: TraceEvent[];
+}
+
+export interface TimelineResponse {
+  run: Run;
+  events: TraceEvent[];
+  groups?: TimelineGroup[];
+  ungrouped?: TraceEvent[];
+}
+
+export async function fetchTimeline(runId: string): Promise<TimelineResponse> {
+  return request(`/runs/${runId}/timeline?grouped=true`);
 }
 
 export async function fetchMetrics(agentId?: string): Promise<Metrics> {

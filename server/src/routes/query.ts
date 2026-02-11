@@ -1,5 +1,68 @@
 import { Router, Request, Response } from 'express';
-import { EventStore, RunFilter } from '../db/store';
+import { EventStore, EventRecord, RunFilter } from '../db/store';
+
+interface TimelineGroup {
+  group_id: string;
+  name: string;
+  kind: string;
+  latency_ms?: number;
+  error: boolean;
+  event_count: number;
+  events: EventRecord[];
+}
+
+interface GroupedTimeline {
+  groups: TimelineGroup[];
+  ungrouped: EventRecord[];
+}
+
+function buildGroupedTimeline(events: EventRecord[]): GroupedTimeline {
+  const groupMap = new Map<string, TimelineGroup>();
+  const ungrouped: EventRecord[] = [];
+  const groupChildIds = new Set<string>();
+
+  // First pass: identify group_started events to build group containers
+  for (const evt of events) {
+    if (evt.event_type === 'group_started' && evt.payload?.group_id) {
+      const gid = evt.payload.group_id as string;
+      groupMap.set(gid, {
+        group_id: gid,
+        name: (evt.payload.group_name as string) || 'Unnamed Group',
+        kind: (evt.payload.kind as string) || 'custom',
+        error: false,
+        event_count: 0,
+        events: [],
+      });
+    }
+  }
+
+  // Second pass: assign events to groups and collect completion metadata
+  for (const evt of events) {
+    if (evt.event_type === 'group_started' || evt.event_type === 'group_completed') {
+      const gid = evt.payload?.group_id as string;
+      if (evt.event_type === 'group_completed' && gid && groupMap.has(gid)) {
+        const g = groupMap.get(gid)!;
+        g.latency_ms = evt.latency_ms;
+        g.error = evt.error_flag;
+        g.event_count = (evt.payload?.event_count as number) || g.events.length;
+      }
+      groupChildIds.add(evt.event_id);
+      continue;
+    }
+
+    if (evt.parent_event_id && groupMap.has(evt.parent_event_id)) {
+      groupMap.get(evt.parent_event_id)!.events.push(evt);
+      groupChildIds.add(evt.event_id);
+    } else {
+      ungrouped.push(evt);
+    }
+  }
+
+  return {
+    groups: Array.from(groupMap.values()),
+    ungrouped,
+  };
+}
 
 export function createQueryRouter(store: EventStore): Router {
   const router = Router();
@@ -55,6 +118,13 @@ export function createQueryRouter(store: EventStore): Router {
       return;
     }
     const events = store.getRunEvents(tenantId, req.params.runId);
+
+    if (req.query.grouped === 'true') {
+      const grouped = buildGroupedTimeline(events);
+      res.json({ run, events, ...grouped });
+      return;
+    }
+
     res.json({ run, events });
   });
 

@@ -185,6 +185,10 @@ class TracedRun:
         """Create a traced step context manager."""
         return TracedStep(self, name)
 
+    def group(self, name: str, kind: str = "custom") -> TracedGroup:
+        """Create a traced group context manager for collapsible event sections."""
+        return TracedGroup(self, name, kind)
+
     def track_tool(
         self,
         tool_name: str,
@@ -316,3 +320,125 @@ class TracedStep:
             error=error,
             parent_event_id=self._step_id,
         )
+
+
+class TracedGroup:
+    """Context manager for grouping related events into collapsible sections."""
+
+    def __init__(self, run: TracedRun, name: str, kind: str = "custom") -> None:
+        self._run = run
+        self._name = name
+        self._kind = kind
+        self._group_id = str(uuid.uuid4())
+        self._start: float = 0
+        self._event_count = 0
+
+    def __enter__(self) -> TracedGroup:
+        self._start = time.monotonic()
+        self._run.emit("group_started", {
+            "group_name": self._name,
+            "group_id": self._group_id,
+            "kind": self._kind,
+        })
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        latency = (time.monotonic() - self._start) * 1000
+        payload: dict[str, Any] = {
+            "group_name": self._name,
+            "group_id": self._group_id,
+            "kind": self._kind,
+            "event_count": self._event_count,
+        }
+        if exc_type is not None:
+            payload["error"] = str(exc_val)
+            self._run.emit("group_completed", payload, latency_ms=latency, error=True)
+        else:
+            self._run.emit("group_completed", payload, latency_ms=latency)
+
+    @property
+    def group_id(self) -> str:
+        return self._group_id
+
+    @property
+    def event_count(self) -> int:
+        return self._event_count
+
+    def emit(
+        self,
+        event_type: str,
+        payload: Optional[dict[str, Any]] = None,
+        *,
+        latency_ms: Optional[float] = None,
+        error: bool = False,
+    ) -> None:
+        """Emit an event scoped to this group."""
+        self._event_count += 1
+        self._run.emit(
+            event_type,
+            payload,
+            latency_ms=latency_ms,
+            error=error,
+            parent_event_id=self._group_id,
+        )
+
+    def track_tool(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        fn: Callable[[], T],
+    ) -> T:
+        """Track a tool invocation within this group."""
+        start = time.monotonic()
+        self.emit("tool_invocation", {"tool_name": tool_name, "arguments": args})
+        try:
+            result = fn()
+            latency = (time.monotonic() - start) * 1000
+            self.emit(
+                "tool_response",
+                {"tool_name": tool_name, "result": str(result), "success": True},
+                latency_ms=latency,
+            )
+            return result
+        except Exception as e:
+            latency = (time.monotonic() - start) * 1000
+            self.emit(
+                "tool_response",
+                {"tool_name": tool_name, "error": str(e), "success": False},
+                latency_ms=latency,
+                error=True,
+            )
+            raise
+
+    def track_llm(
+        self,
+        model: str,
+        fn: Callable[[], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Track an LLM invocation within this group."""
+        start = time.monotonic()
+        self.emit("llm_invocation", {"model": model, "started_at": datetime.now(timezone.utc).isoformat()})
+        try:
+            result = fn()
+            latency = (time.monotonic() - start) * 1000
+            self.emit(
+                "llm_invocation",
+                {
+                    "model": model,
+                    "response_preview": str(result.get("response", ""))[:500],
+                    "tokens": result.get("tokens"),
+                    "cost": result.get("cost"),
+                    "completed": True,
+                },
+                latency_ms=latency,
+            )
+            return result
+        except Exception as e:
+            latency = (time.monotonic() - start) * 1000
+            self.emit(
+                "llm_invocation",
+                {"model": model, "error": str(e), "completed": False},
+                latency_ms=latency,
+                error=True,
+            )
+            raise

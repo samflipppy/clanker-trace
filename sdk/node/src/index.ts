@@ -19,6 +19,8 @@ export type EventType =
   | 'run_completed'
   | 'step_started'
   | 'step_completed'
+  | 'group_started'
+  | 'group_completed'
   | 'llm_invocation'
   | 'tool_invocation'
   | 'tool_response'
@@ -31,6 +33,13 @@ export type EventType =
   | 'human_intervention'
   | 'execution_paused'
   | 'execution_resumed'
+  | string;
+
+export type GroupKind =
+  | 'reasoning'
+  | 'tool_chain'
+  | 'retry_cluster'
+  | 'memory_sequence'
   | string;
 
 interface QueuedEvent {
@@ -263,6 +272,35 @@ export class TracedRun {
     }
   }
 
+  async group<T>(name: string, kind: GroupKind, fn: (group: TracedGroup) => Promise<T>): Promise<T> {
+    const groupId = uuidv4();
+    const startTime = Date.now();
+
+    this.emit('group_started', { group_name: name, group_id: groupId, kind });
+
+    try {
+      const tracedGroup = new TracedGroup(this, groupId, name, kind);
+      const result = await fn(tracedGroup);
+      const latency = Date.now() - startTime;
+      this.emit('group_completed', {
+        group_name: name,
+        group_id: groupId,
+        kind,
+        event_count: tracedGroup.eventCount,
+      }, { latency_ms: latency });
+      return result;
+    } catch (err) {
+      const latency = Date.now() - startTime;
+      this.emit('group_completed', {
+        group_name: name,
+        group_id: groupId,
+        kind,
+        error: String(err),
+      }, { latency_ms: latency, error: true });
+      throw err;
+    }
+  }
+
   async complete(options?: { cost?: number; tokens?: number }): Promise<void> {
     this.ended = true;
     await this.tracer.completeRun(this.runId, 'completed', undefined, options?.cost, options?.tokens);
@@ -288,5 +326,81 @@ export class TracedStep {
       ...options,
       parent_event_id: this.stepId,
     });
+  }
+}
+
+export class TracedGroup {
+  private _eventCount = 0;
+
+  constructor(
+    private run: TracedRun,
+    public readonly groupId: string,
+    public readonly name: string,
+    public readonly kind: GroupKind,
+  ) {}
+
+  get eventCount(): number {
+    return this._eventCount;
+  }
+
+  emit(eventType: EventType, payload?: Record<string, unknown>, options?: {
+    latency_ms?: number;
+    error?: boolean;
+  }): void {
+    this._eventCount++;
+    this.run.emit(eventType, payload, {
+      ...options,
+      parent_event_id: this.groupId,
+    });
+  }
+
+  async trackLLM(model: string, fn: () => Promise<{ response: string; tokens?: number; cost?: number }>): Promise<{ response: string; tokens?: number; cost?: number }> {
+    const startTime = Date.now();
+    this.emit('llm_invocation', { model, started_at: new Date().toISOString() });
+
+    try {
+      const result = await fn();
+      const latency = Date.now() - startTime;
+      this.emit('llm_invocation', {
+        model,
+        response_preview: result.response.slice(0, 500),
+        tokens: result.tokens,
+        cost: result.cost,
+        completed: true,
+      }, { latency_ms: latency });
+      return result;
+    } catch (err) {
+      const latency = Date.now() - startTime;
+      this.emit('llm_invocation', {
+        model,
+        error: String(err),
+        completed: false,
+      }, { latency_ms: latency, error: true });
+      throw err;
+    }
+  }
+
+  async trackTool(toolName: string, args: Record<string, unknown>, fn: () => Promise<unknown>): Promise<unknown> {
+    const startTime = Date.now();
+    this.emit('tool_invocation', { tool_name: toolName, arguments: args });
+
+    try {
+      const result = await fn();
+      const latency = Date.now() - startTime;
+      this.emit('tool_response', {
+        tool_name: toolName,
+        result: typeof result === 'string' ? result : JSON.stringify(result),
+        success: true,
+      }, { latency_ms: latency });
+      return result;
+    } catch (err) {
+      const latency = Date.now() - startTime;
+      this.emit('tool_response', {
+        tool_name: toolName,
+        error: String(err),
+        success: false,
+      }, { latency_ms: latency, error: true });
+      throw err;
+    }
   }
 }
