@@ -1,0 +1,21 @@
+{
+  "name": "clanker-trace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Runtime observability system for autonomous AI agents",
+  "workspaces": [
+    "server",
+    "sdk/node",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces --if-present",
+    "dev:server": "npm run dev --workspace=server",
+    "dev:web": "npm run dev --workspace=web",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+*.db
+*.sqlite
+.env
+.env.local
+coverage/
+.nyc_output/
+__pycache__/
+*.pyc
+*.egg-info/
+*.egg
+.pytest_cache/
+.venv/
+venv/
